@@ -13,3 +13,12 @@ todos_run:
 
 api_run:
 	go run ./api/main.go
+	
+build:
+	docker-compose -f docker-compose.production.yml build
+
+run_prod:
+	docker-compose -f docker-compose.production.yml up -d
+
+down:
+	docker-compose -f docker-compose.production.yml down 
