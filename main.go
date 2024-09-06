@@ -1,66 +1,15 @@
 package main
 
-// func main() {
-// 	srv1 := &http.Server{
-// 		Addr:    ":3000",
-// 		Handler: newRouter(),
-// 	}
-
-// 	srv2 := &http.Server{
-// 		Addr:    ":3001",
-// 		Handler: newRouter(),
-// 	}
-
-// 	go func() {
-// 		if err := srv1.ListenAndServe(); err != nil {
-// 			if errors.Is(err, http.ErrServerClosed) {
-// 				log.Println("stopped serving new connections for srv1.")
-// 				shutDownCtx, shutdownRelease := context.WithTimeout(context.Background(), 10*time.Second)
-// 				defer shutdownRelease()
-// 				if err := srv2.Shutdown(shutDownCtx); err != nil {
-// 					log.Fatalf("HTTP shutdown error for srv2: %v", err)
-// 				}
-// 				log.Println("Graceful shutdown completed for srv2.")
-// 			}
-// 		}
-// 	}()
-
-// 	go func() {
-// 		if err := srv2.ListenAndServe(); err != nil {
-// 			if errors.Is(err, http.ErrServerClosed) {
-// 				log.Println("stopped serving new connections for srv2.")
-// 			}
-// 		}
-// 	}()
-
-// 	sigChan := make(chan os.Signal, 1)
-// 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-// 	<-sigChan
-
-// 	shutDownCtx, shutdownRelease := context.WithTimeout(context.Background(), 10*time.Second)
-// 	defer shutdownRelease()
-// 	if err := srv1.Shutdown(shutDownCtx); err != nil {
-// 		log.Fatalf("HTTP shutdown error: %v", err)
-// 	}
-// 	log.Println("Graceful shutdown complete.")
-// }
-
-// func newRouter() *gin.Engine {
-// 	r := gin.Default()
-// 	r.GET("/", func(ctx *gin.Context) {
-// 		ctx.JSON(http.StatusOK, "Hello world")
-// 	})
-// 	return r
-// }
-
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"otel-to-do-app/config"
 	"otel-to-do-app/mongodb"
 	"otel-to-do-app/router"
 	"otel-to-do-app/tracing"
@@ -71,57 +20,35 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 )
 
+var (
+	env = flag.String("env", "local", "used to know what environment the project is running")
+)
+
 func main() {
-	apiServer := http.Server{Addr: ":8888"}
-	todoApiServer := http.Server{Addr: ":8080"}
-
-	go func() {
-		tp, err := tracing.JaegerTracingProvider("todo-service", "http://localhost:14268/api/traces")
-		if err != nil {
-			panic(err)
+	flag.Parse()
+	cfg, err := config.LoadEnvConfig(*env)
+	if err != nil {
+		panic(err)
+	}
+	apiServer := http.Server{Addr: fmt.Sprintf(":%v", cfg.ApiServerPort)}
+	todoApiServer := http.Server{Addr: fmt.Sprintf(":%v", cfg.TodoServerPort)}
+	ch := make(chan error)
+	defer close(ch)
+	go newAPIServer(ch, apiServer, cfg.TracingExporterURL)
+	err = <-ch
+	if err != nil {
+		panic(err)
+	}
+	go newTodoAPIServer(ch, todoApiServer, cfg.TracingExporterURL, cfg.MongoDBURI)
+	err = <-ch
+	if err != nil {
+		shutDownCtx, shutdowRelease := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdowRelease()
+		if err := apiServer.Shutdown(shutDownCtx); err != nil {
+			fmt.Printf("apiServer shutdown error: %v", err.Error())
 		}
-		otel.SetTracerProvider(tp)
-		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
-		client, err := mongodb.NewMongoDB("mongodb://localhost:27017")
-		if err != nil {
-			panic(err)
-		}
-		todoApiServer.Handler = router.NewRouterTodoAPP(client)
-		if err := todoApiServer.ListenAndServe(); err != nil {
-			if errors.Is(err, http.ErrServerClosed) {
-				log.Println("stopped serving new connections for todoApiServer.")
-				return
-			}
-			log.Fatal("todoApiServer shutdown error: %w", err)
-		}
-	}()
-
-	time.Sleep(2 * time.Second)
-
-	go func() {
-		tp, err := tracing.JaegerTracingProvider("api-service", "http://localhost:14268/api/traces")
-		if err != nil {
-			panic(err)
-		}
-		otel.SetTracerProvider(tp)
-		otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
-		apiServer.Handler = router.NewRouterAPI()
-		if err := apiServer.ListenAndServe(); err != nil {
-			if errors.Is(err, http.ErrServerClosed) {
-				fmt.Println("stopped serving connection for apiServer. Started to shutting down connections to todoApiServer")
-			} else {
-				fmt.Printf("apiServer shutdown error: %v", err.Error())
-				fmt.Println("Started to shutting down connections to todoApiServer")
-			}
-			shutDownCtx, shutdowRelease := context.WithTimeout(context.Background(), 10*time.Second)
-			defer shutdowRelease()
-			if err := todoApiServer.Shutdown(shutDownCtx); err != nil {
-				fmt.Printf("todoApiServer shutdown error: %v", err.Error())
-				return
-			}
-			fmt.Println("graceful shutdow completed for todoApiServer")
-		}
-	}()
+		panic(err)
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -130,7 +57,54 @@ func main() {
 	shutDownCtx, shutdowRelease := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdowRelease()
 	if err := apiServer.Shutdown(shutDownCtx); err != nil {
-		log.Fatal("apiServer shutdown error: %w", err)
+		fmt.Printf("apiServer shutdown error: %v", err.Error())
 	}
-	log.Println("graceful shutdown completed for apiServer")
+	fmt.Println("apiServer terminated successfully")
+	if err := todoApiServer.Shutdown(shutDownCtx); err != nil {
+		fmt.Printf("todoApiServer shutdown error: %v", err.Error())
+	}
+	fmt.Println("todoApiServer terminated successfully")
+}
+
+func newAPIServer(ch chan<- error, apiServer http.Server, tracingExporterURL string) {
+	tp, err := tracing.JaegerTracingProvider("api-service", tracingExporterURL)
+	if err != nil {
+		ch <- err
+		return
+	}
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	ch <- nil
+	apiServer.Handler = router.NewRouterAPI()
+	if err := apiServer.ListenAndServe(); err != nil {
+		if errors.Is(err, http.ErrServerClosed) {
+			fmt.Println("stopped serving connection for apiServer")
+			return
+		}
+		fmt.Printf("apiServer shutdown error: %v", err.Error())
+	}
+}
+
+func newTodoAPIServer(ch chan<- error, server http.Server, tracingExporterURL, mongoDBURI string) {
+	tp, err := tracing.JaegerTracingProvider("todo-service", tracingExporterURL)
+	if err != nil {
+		ch <- err
+		return
+	}
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+	client, err := mongodb.NewMongoDB(mongoDBURI)
+	if err != nil {
+		ch <- err
+		return
+	}
+	ch <- nil
+	server.Handler = router.NewRouterTodoAPP(client)
+	if err := server.ListenAndServe(); err != nil {
+		if errors.Is(err, http.ErrServerClosed) {
+			log.Println("stopped serving new connections for todoApiServer.")
+			return
+		}
+		log.Fatal("todoApiServer shutdown error: %w", err)
+	}
 }
