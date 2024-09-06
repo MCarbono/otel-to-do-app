@@ -10,7 +10,7 @@
 
 <a id="About"></a> 
 ## 📃 About
-This app is just an experiment of open telemetry tracing using Go with 2 web servers. Basically, one server makes a request to another and we can track the steps of each request. This code is based on <a href=" https://www.aspecto.io/blog/opentelemetry-go-getting-started/">aspecto </a>getting started tracing tutorial. After running the project, check it out the <a href="#Endpoints">endpoints</a> section. To run this project you need to have docker installed on your machine. 
+This app is just an experiment of open telemetry tracing using Go with 2 web servers. Basically, one server makes a request to another and we can track the steps of each request. This code is based on <a href="https://www.aspecto.io/blog/opentelemetry-go-getting-started/">aspecto </a>getting started tracing tutorial. After running the project, check it out the <a href="#Endpoints">endpoints</a> section. To run this project you need to have docker installed on your machine. 
 
 ---
 <a id="Libs/Dependencies"></a> 
@@ -34,7 +34,7 @@ This app is just an experiment of open telemetry tracing using Go with 2 web ser
 <a id="Run"></a> 
 ## ⚙️ Run
 
-There's two ways of starting this project: using docker to start the webservers and the database on containers or start the database via docker and starting the server locally on your machine.
+There's two ways of starting this project: using docker to start the webservers and the database on containers or start the database via docker and starting the server locally on your machine. The database that is used is the mongoDB and when its created a connection to it, the database is seed with a few tasks for the to-do list.
 
 ### Using docker for database and webserver
 
